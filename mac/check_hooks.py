@@ -39,6 +39,9 @@ class mac_check_hooks(common.AbstractMacCommand):
                           cache_invalidator = False, help = "Check all kext functions in the kext's symbol table for hooking, including kernel symbol table", action = "store_true")
         self._config.add_option("CHECKKERNEL", short_option = 'K', default = False,
                           cache_invalidator = False, help = "Check only kernel symbol table functions for hooking", action = "store_true")
+        config.add_option('DISPLAYSYMBOLS', short_option = 'I', default = False,
+                          help = 'Show symbols for given kext',
+                          action = 'store', type = 'str')
 
     def getKextSymbols(self, kext_obj = None, kext_name = None, kext_addr = 0, onlyFunctions = False, fmodel = '64bit'):
         # get symbol table based on https://github.com/gdbinit/hydra/blob/master/hydra/hydra/kernel_info.c (works)
@@ -213,6 +216,65 @@ class mac_check_hooks(common.AbstractMacCommand):
 
         return (is_shadowed, shadowtbl_addr)
 
+    def isReferenceModified(self, model, distorm_mode, func_addr, mod_start, mod_end):
+        # check if CALL targets are within the kext range to detect possible call reference modification
+
+        modified = False
+
+        #modified malware/apihooks.py/check_inline function
+        data = self.addr_space.read(func_addr, 750)
+
+        # Number of instructions disassembled so far
+        n = 0
+        # Destination address of hooks
+        d = None
+        # Save the last PUSH before a CALL
+        push_val = None
+        # Save the general purpose registers
+        regs = {}
+        ops = []
+
+        for op in distorm3.Decompose(func_addr, data, distorm_mode):
+            ops.append(op)
+
+        for op in distorm3.Decompose(func_addr, data, distorm_mode):
+            # Quit when a decomposition error is encountered
+            # or when reach function end
+            if not op.valid or op.mnemonic == "NOP":
+                break
+
+            if op.flowControl == 'FC_CALL':
+                # Clear the push value
+                if push_val:
+                    push_val = None
+                if op.mnemonic == "CALL" and op.operands[0].type == 'AbsoluteMemoryAddress':
+                    # Check for CALL [ADDR]
+                    if model == '32bit':
+                        const = op.operands[0].disp & 0xFFFFFFFF
+                        d = obj.Object("unsigned int", offset = const, vm = addr_space)
+                    else: 
+                        const = op.operands[0].disp
+                        d = obj.Object("unsigned long long", offset = const, vm = addr_space)
+                    if self.outside_module(d, mod_start, mod_end):
+                        break
+                elif op.operands[0].type == 'Immediate':
+                    # Check for CALL ADDR
+                    d = op.operands[0].value
+                    if self.outside_module(d, mod_start, mod_end):
+                        break
+                elif op.operands[0].type == 'Register':
+                    # Check for CALL REG
+                    d = regs.get(op.operands[0].name)
+                    if d and self.outside_module(d, mod_start, mod_end):
+                        break
+            n += 1
+
+        # filtering out false positives due to structs, you can tweak this as needed 
+        if d and self.outside_module(d, mod_start, mod_end) == True and str(ops[n+1].mnemonic) not in ["DB 0xff", "ADD", "XCHG", "OUTS"]:
+            modified = True
+
+        return (modified, d)
+
     def isPrologInlined(self, model, distorm_mode, func_addr):
         ##check if function prologs are modified
         inlined = False
@@ -366,6 +428,33 @@ class mac_check_hooks(common.AbstractMacCommand):
 
         sym_addrs = self.profile.get_all_addresses()
 
+        # get all kexts and symbols
+        if self._config.DISPLAYSYMBOLS != False:
+            kext_addr_list = []
+            # get kernel address
+            kmod = obj.Object("kmod_info", offset = self.addr_space.profile.get_symbol("_g_kernel_kmod_info"), vm = self.addr_space)
+            kext_addr_list.append(('__kernel__', kmod.address, kmod.m('size')))
+
+            p = self.addr_space.profile.get_symbol("_kmod")
+            kmodaddr = obj.Object("Pointer", offset = p, vm = self.addr_space)
+            kmod = kmodaddr.dereference_as("kmod_info")
+            while kmod.is_valid():
+                kext_addr_list.append((kmod.name, kmod.address, kmod.m('size')))
+                kmod = kmod.next
+
+            # loop thru kexts
+            for kext_name, kext_address, kext_size in kext_addr_list:
+                if  self._config.DISPLAYSYMBOLS in "{0}".format(kext_name):
+                    k_start = kext_address
+                    k_end  = kext_address + kext_size
+
+                    #loop thru kext functions
+                    for func_name, func_addr in self.getKextSymbols(kext_addr = kext_address, onlyFunctions = True, fmodel = model):                
+                        print "{0} {1} {2:#10x}".format(kext_name, func_name, func_addr)
+
+            yield ('-', 0, False, False, False, False, '-', '-')
+            return
+
         # get kernel start, end
         kp = self.addr_space.profile.get_symbol("_g_kernel_kmod_info")
         kmodk = obj.Object("kmod_info", offset = kp, vm = self.addr_space)
@@ -445,6 +534,7 @@ class mac_check_hooks(common.AbstractMacCommand):
                 kmod = kmodaddr.dereference_as("kmod_info")
                 while kmod.is_valid():
                     kext_addr_list.append((kmod.name, kmod.address, kmod.m('size')))
+                    kmod = kmod.next
 
             # loop thru kexts
             for kext_name, kext_address, kext_size in kext_addr_list:
@@ -460,6 +550,14 @@ class mac_check_hooks(common.AbstractMacCommand):
                         continue
 
                     # check if function's been modified
+                    modified, dst_addr = self.isReferenceModified(model, distorm_mode, func_addr, k_start, k_end)
+                    if modified:
+                        if dst_addr != None:
+                            hook_kext = self.findKextWithAddress(dst_addr)
+                        else:
+                            hook_kext = kext_name
+                        yield ("SymbolsTable", '-', func_addr, False, modified, False, '-', hook_kext)
+
                     inlined, dst_addr = self.isInlined(model, distorm_mode, func_addr, k_start, k_end)
                     #prolog_inlined = self.isPrologInlined(model, distorm_mode, func_addr)
                     if inlined:
