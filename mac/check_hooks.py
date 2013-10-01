@@ -216,8 +216,8 @@ class mac_check_hooks(common.AbstractMacCommand):
 
         return (is_shadowed, shadowtbl_addr)
 
-    def isReferenceModified(self, model, distorm_mode, func_addr, mod_start, mod_end):
-        # check if CALL targets are within the kext range to detect possible call reference modification
+    def isCallReferenceModified(self, model, distorm_mode, func_addr, mod_start, mod_end):
+        # check if CALL targets are within the kernel/kext range to detect possible call reference modification
 
         modified = False
 
@@ -550,7 +550,7 @@ class mac_check_hooks(common.AbstractMacCommand):
                         continue
 
                     # check if function's been modified
-                    modified, dst_addr = self.isReferenceModified(model, distorm_mode, func_addr, k_start, k_end)
+                    modified, dst_addr = self.isCallReferenceModified(model, distorm_mode, func_addr, k_start, k_end)
                     if modified:
                         if dst_addr != None:
                             hook_kext = self.findKextWithAddress(dst_addr)
