@@ -55,14 +55,13 @@ class mac_check_dtrace(common.AbstractMacCommand):
 
         # mach_trap probes: http://felinemenace.org/~nemo/dtrace-infiltrate.pdf
         t = trap.mac_check_trap_table(self._config, args)
-        for (traptbl, index, ent_addr, other_hooked) in t.calculate():
-            if other_hooked == False:
-                sym_name = self.profile.get_symbol_by_address("kernel", ent_addr)
-            else:
+        for (table_addr, table_name, index, call_addr, sym_name, other_hooked) in t.calculate():
+            if other_hooked == True:
                 sym_name = "HOOKED"
+
             if 'dtrace' in sym_name:
                 hooked = "mach_trap_probe"
-                yield ('Trap_Table', index, ent_addr, sym_name, hooked)
+                yield ('Trap_Table', index, call_addr, sym_name, hooked)
  
     def render_text(self, outfd, data):
         self.table_header(outfd, [("Table Name", "15"), ("Index", "<6"), ("Address", "[addrpad]"), ("Symbol", "<30"), ("D-Trace Probe", "<15")])
