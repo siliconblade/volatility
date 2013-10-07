@@ -570,8 +570,8 @@ class mac_check_hooks(common.AbstractMacCommand):
         # check if trap table hooked using check_trap_table
         args = ()
         trap = check_trap_table.mac_check_trap_table(self._config, args)
-        for (table_name, i, call_addr, hooked) in trap.calculate():
-            if hooked == True or 'dtrace' in self.addr_space.profile.get_symbol_by_address("kernel", call_addr):
+        for (table_addr, table_name, i, call_addr, sym_name, hooked) in trap.calculate():
+            if hooked == True or 'dtrace' in sym_name:
                 kext = self.findKextWithAddress(call_addr)
                 yield ("TrapTable", i, call_addr, hooked, False, False, '-', kext)
 
