@@ -50,16 +50,27 @@ class mac_bitcoin(common.AbstractMacCommand):
 
     def  __init__(self, config, *args, **kwargs):
         common.AbstractMacCommand.__init__(self, config, *args, **kwargs)
+        self._config.add_option('PID', short_option = 'p', default = None, help = 'Operate on these Process IDs (comma-separated)', action = 'store', type = 'str')
         
     def calculate(self):
-        # find multibit process
         all_tasks = pstasks.mac_tasks(self._config).allprocs()
-        try:
-            name_re = re.compile("JavaApplicationS", re.I)
-        except re.error:
-            debug.error("Invalid name {0}".format(self._config.NAME))
+        bit_tasks = []
 
-        bit_tasks = [t for t in all_tasks if name_re.search(str(t.p_comm))]
+        try:
+            if self._config.PID:
+                # find tasks given PIDs
+                pidlist = [int(p) for p in self._config.PID.split(',')]
+                bit_tasks = [t for t in all_tasks if t.p_pid in pidlist]
+            else:
+                # find multibit process
+                name_re = re.compile("JavaApplicationS", re.I)
+                bit_tasks = [t for t in all_tasks if name_re.search(str(t.p_comm))]
+        except:
+            pass
+
+        if len(bit_tasks) == 0:
+            yield (None, None)
+
 
         # scan for bitcoin addresses with yara, 34 chars, https://en.bitcoin.it/wiki/Address
         # Most Bitcoin addresses are 34 characters. They consist of random digits and uppercase 
